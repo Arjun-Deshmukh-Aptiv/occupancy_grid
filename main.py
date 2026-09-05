@@ -157,21 +157,79 @@ class VehicleGridVisualizer:
         traj_x, traj_y = self.predict_trajectory(self.state, v, steer)
         R = self.compute_reachability(X, Y, traj_x, traj_y, v)
 
+        reachable_cells = np.sum(R >= thresh)
+
+        total_cells = R.size
+
+        ref_factor = int(float(self.res_text.text))
+
+        adaptive_cells = (
+            total_cells
+            - reachable_cells
+            + reachable_cells * ref_factor**2
+        )
+
+        full_fine_cells = total_cells * ref_factor**2
+
+        # CSI
+        csi = (
+            1.0 -
+            adaptive_cells / full_fine_cells
+        ) * 100.0
+
+        # ARG
+        arg = adaptive_cells / total_cells
+
+        # DRC
+        drc = reachable_cells / total_cells * 100.0
+
+        # Value Gain per Cell
+        vgc_adaptive = reachable_cells / adaptive_cells
+        vgc_fullfine = reachable_cells / full_fine_cells
+
+        vgc_gain = (
+            vgc_adaptive /
+            max(vgc_fullfine, 1e-6)
+        )
+
+        metrics = (
+            f"CSI : {csi:.1f}%\n"
+            f"ARG : {arg:.2f}x\n"
+            f"DRC : {drc:.1f}%\n"
+            f"VGC : {vgc_gain:.2f}x"
+        )
+
+        
+        
+
         # 4. Draw Everything
         self.ax.clear()
         # Show pause/continue hint
+
         self.ax.text(
-            0.01,
-            0.99,
-            "Space bar: pause/continue",
-            transform=self.ax.transAxes,
-            va='top',
-            ha='left',
-            color='white',
-            fontsize=10,
-            bbox=dict(facecolor='black', alpha=0.6, edgecolor='none', pad=4),
-            zorder=10,
-        )
+                    0.02,
+                    0.95,
+                    metrics,
+                    transform=self.ax.transAxes,
+                    color='white',
+                    fontsize=10,
+                    verticalalignment='top',
+                    bbox=dict(facecolor='black', alpha=0.7)
+                )
+
+        
+        # self.ax.text(
+        #     0.01,
+        #     0.99,
+        #     "Space bar: pause/continue",
+        #     transform=self.ax.transAxes,
+        #     va='top',
+        #     ha='left',
+        #     color='white',
+        #     fontsize=10,
+        #     bbox=dict(facecolor='black', alpha=0.6, edgecolor='none', pad=4),
+        #     zorder=10,
+        # )
         self.ax.set_title("Vehicle Reachability Grid Prediction")
         self.ax.xaxis.set_major_locator(MultipleLocator(self.resolution))
         self.ax.yaxis.set_major_locator(MultipleLocator(self.resolution))
