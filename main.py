@@ -31,10 +31,13 @@ class VehicleGridVisualizer:
         self.dt = 0.1  # Simulation time step
 
         # Moving object
-        self.object_pos = np.array([10.0, 10.0])
+        self.object_pos = np.array([30.0, 30.0])
         self.object_vel = np.array([0.0, 0.0])
         self.object_is_moving = False
         self.ttc = np.inf
+        self.obj_relative_vel = np.array([0.0, 0.0])
+        self.obj_relative_heading = 0.0
+        self.obj_relative_pos = np.array([0.0, 0.0])
 
         self.object_length = 4.0
         self.object_width = 2.0
@@ -100,7 +103,7 @@ class VehicleGridVisualizer:
             self.ax_obj_speed, "Obj Speed", 0.0, 15.0, valinit=5.0
         )
         self.sl_obj_heading = Slider(
-            self.ax_obj_heading, "Obj Heading", -180.0, 180.0, valinit=45.0
+            self.ax_obj_heading, "Obj Heading", -180.0, 180.0, valinit=-135.0
         )
 
         # Resolution increment factor for area-of-interest (enter integer)
@@ -211,7 +214,7 @@ class VehicleGridVisualizer:
                 y + self.grid_side_length_m / 2,
             )
 
-        self.object_pos = self.get_display_object_position(
+        self.object_pos = self.reset_obj_and_host_pos_if_needed(
             self.object_pos,
             grid_x_min,
             grid_y_min
@@ -275,18 +278,6 @@ class VehicleGridVisualizer:
             bbox=dict(facecolor="black", alpha=0.7),
         )
 
-        # self.ax.text(
-        #     0.01,
-        #     0.99,
-        #     "Space bar: pause/continue",
-        #     transform=self.ax.transAxes,
-        #     va='top',
-        #     ha='left',
-        #     color='white',
-        #     fontsize=10,
-        #     bbox=dict(facecolor='black', alpha=0.6, edgecolor='none', pad=4),
-        #     zorder=10,
-        # )
         self.ax.set_title("Vehicle Reachability Grid Prediction")
         self.ax.xaxis.set_major_locator(MultipleLocator(self.resolution))
         self.ax.yaxis.set_major_locator(MultipleLocator(self.resolution))
@@ -404,46 +395,56 @@ class VehicleGridVisualizer:
 
     def update_moving_object(self):
         obj_speed = self.sl_obj_speed.val
-        obj_heading = np.radians(self.sl_obj_heading.val)
+        self.object_heading = np.radians(self.sl_obj_heading.val)
         self.object_vel = np.array(
-            [obj_speed * np.cos(obj_heading), obj_speed * np.sin(obj_heading)]
+            [obj_speed * np.cos(self.object_heading), obj_speed * np.sin(self.object_heading)]
         )
         self.object_pos += self.object_vel * self.dt
         self.object_pos[0] %= self.grid_side_length_m
         self.object_pos[1] %= self.grid_side_length_m
         self.object_is_moving = np.linalg.norm(self.object_vel) > self.moving_threshold
-        if self.object_is_moving:
-            t = np.linspace(0.0, 6.0, 100)
-            pred_x = self.object_pos[0] + self.object_vel[0] * t
-            pred_y = self.object_pos[1] + self.object_vel[1] * t
-            self.ax.plot(pred_x, pred_y, "c--", linewidth=2)
+        self.estimate_moving_object_ttc()
+
+        disp_obj_pos = self.object_pos
+        if self.radio.value_selected == "World Fixed": 
+            disp_obj_vel = self.object_vel
+            disp_obj_heading = self.object_heading
+        else:
+            disp_obj_vel = self.obj_relative_vel
+            disp_obj_heading = self.obj_relative_heading
+        
         obj_bl_x = (
-            self.object_pos[0]
-            - (self.object_length / 2) * np.cos(obj_heading)
-            + (self.object_width / 2) * np.sin(obj_heading)
+            disp_obj_pos[0]
+            - (self.object_length / 2) * np.cos(disp_obj_heading)
+            + (self.object_width / 2) * np.sin(disp_obj_heading)
         )
 
         obj_bl_y = (
-            self.object_pos[1]
-            - (self.object_length / 2) * np.sin(obj_heading)
-            - (self.object_width / 2) * np.cos(obj_heading)
+            disp_obj_pos[1]
+            - (self.object_length / 2) * np.sin(disp_obj_heading)
+            - (self.object_width / 2) * np.cos(disp_obj_heading)
         )
+
+        
+
         obj_rect = Rectangle(
             (obj_bl_x, obj_bl_y),
             self.object_length,
             self.object_width,
-            angle=np.degrees(obj_heading),
+            angle=np.degrees(disp_obj_heading),
             edgecolor="cyan",
             facecolor="royalblue",
             lw=2,
             zorder=6,
         )
+
         self.ax.add_patch(obj_rect)
+        
         self.ax.arrow(
-            self.object_pos[0],
-            self.object_pos[1],
-            self.object_vel[0],
-            self.object_vel[1],
+            disp_obj_pos[0],
+            disp_obj_pos[1],
+            disp_obj_vel[0],
+            disp_obj_vel[1],
             color="cyan",
             width=0.15,
             length_includes_head=True,
@@ -452,12 +453,12 @@ class VehicleGridVisualizer:
         if self.object_is_moving and 0.0 < self.ttc < self.ttc_threshold:
             self.ax.plot(
                 [
-                    self.object_pos[0],
-                    self.object_pos[0] + self.ttc * self.object_vel[0],
+                    disp_obj_pos[0],
+                    disp_obj_pos[0] + self.ttc * disp_obj_vel[0],
                 ],
                 [
-                    self.object_pos[1],
-                    self.object_pos[1] + self.ttc * self.object_vel[1],
+                    disp_obj_pos[1],
+                    disp_obj_pos[1] + self.ttc * disp_obj_vel[1],
                 ],
                 color="red",
                 linewidth=10,
@@ -465,18 +466,19 @@ class VehicleGridVisualizer:
                 zorder=2,
             )
 
-    def esimtate_moving_object_ttc(self):
-        relative_pos = self.object_pos - self.state[:2]
-        relative_vel = self.object_vel - self.host_vel
+    def estimate_moving_object_ttc(self):
+        self.obj_relative_pos = self.object_pos - self.state[:2]
+        self.obj_relative_vel = self.object_vel - self.host_vel
+        self.obj_relative_heading = np.arctan2(self.obj_relative_vel[1], self.obj_relative_vel[0])
         self.ttc = np.inf
 
-        denom = np.dot(relative_vel, relative_vel)
+        denom = np.dot(self.obj_relative_vel, self.obj_relative_vel)
 
         if denom > 1e-6:
-            self.ttc = -(np.dot(relative_pos, relative_vel)) / denom
+            self.ttc = -(np.dot(self.obj_relative_pos, self.obj_relative_vel)) / denom
 
     def modify_reachability_matrix_to_include_ttc(self, reachability_matrix, X, Y):
-        self.esimtate_moving_object_ttc()
+        self.estimate_moving_object_ttc()
 
         if self.object_is_moving and 0.0 < self.ttc < self.ttc_threshold:
             P0 = self.object_pos
@@ -505,7 +507,7 @@ class VehicleGridVisualizer:
 
         return reachability_matrix
 
-    def get_display_object_position(
+    def reset_obj_and_host_pos_if_needed(
             self,
             obj_pos,
             grid_x_min,
@@ -513,30 +515,14 @@ class VehicleGridVisualizer:
         if (self.prev_coord_mode == "World Fixed") and (self.radio.value_selected == "World Fixed"):
             return obj_pos.copy()
         elif (self.prev_coord_mode == "World Fixed") and (self.radio.value_selected != "World Fixed"):
-            x = (
-                (obj_pos[0] - grid_x_min)
-                % self.grid_side_length_m
-            ) + grid_x_min
-
-            y = (
-                (obj_pos[1] - grid_y_min)
-                % self.grid_side_length_m
-            ) + grid_y_min
-
+            x = 0.75*self.grid_side_length_m + grid_x_min
+            y = 0.75*self.grid_side_length_m + grid_y_min
             return np.array([x, y])
         elif (self.prev_coord_mode != "World Fixed") and (self.radio.value_selected == "World Fixed"):
-            x = (
-                (obj_pos[0] - grid_x_min)
-                % self.grid_side_length_m
-            ) + grid_x_min
-
-            y = (
-                (obj_pos[1] - grid_y_min)
-                % self.grid_side_length_m
-            ) + grid_y_min
-
+            x = 0.75*self.grid_side_length_m + grid_x_min
+            y = 0.75*self.grid_side_length_m + grid_y_min
+            self.state = np.array([self.grid_side_length_m / 2, self.grid_side_length_m / 2, 0.0])
             return np.array([x, y])
-
         else:
             return obj_pos.copy()
 
